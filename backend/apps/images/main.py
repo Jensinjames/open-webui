@@ -1,4 +1,4 @@
-import os
+import re
 import requests
 from fastapi import (
     FastAPI,
@@ -34,6 +34,8 @@ app.add_middleware(
 
 app.state.AUTOMATIC1111_BASE_URL = AUTOMATIC1111_BASE_URL
 app.state.ENABLED = app.state.AUTOMATIC1111_BASE_URL != ""
+app.state.IMAGE_SIZE = "512x512"
+app.state.IMAGE_STEPS = 50
 
 
 @app.get("/enabled", response_model=bool)
@@ -48,7 +50,7 @@ async def toggle_enabled(request: Request, user=Depends(get_admin_user)):
         app.state.ENABLED = not app.state.ENABLED
         return app.state.ENABLED
     except Exception as e:
-        raise HTTPException(status_code=r.status_code, detail=ERROR_MESSAGES.DEFAULT(e))
+        raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
 
 class UrlUpdateForm(BaseModel):
@@ -74,6 +76,59 @@ async def update_openai_url(form_data: UrlUpdateForm, user=Depends(get_admin_use
     }
 
 
+class ImageSizeUpdateForm(BaseModel):
+    size: str
+
+
+@app.get("/size")
+async def get_image_size(user=Depends(get_admin_user)):
+    return {"IMAGE_SIZE": app.state.IMAGE_SIZE}
+
+
+@app.post("/size/update")
+async def update_image_size(
+    form_data: ImageSizeUpdateForm, user=Depends(get_admin_user)
+):
+    pattern = r"^\d+x\d+$"  # Regular expression pattern
+    if re.match(pattern, form_data.size):
+        app.state.IMAGE_SIZE = form_data.size
+        return {
+            "IMAGE_SIZE": app.state.IMAGE_SIZE,
+            "status": True,
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (e.g., 512x512)."),
+        )
+
+
+class ImageStepsUpdateForm(BaseModel):
+    steps: int
+
+
+@app.get("/steps")
+async def get_image_size(user=Depends(get_admin_user)):
+    return {"IMAGE_STEPS": app.state.IMAGE_STEPS}
+
+
+@app.post("/steps/update")
+async def update_image_size(
+    form_data: ImageStepsUpdateForm, user=Depends(get_admin_user)
+):
+    if form_data.steps >= 0:
+        app.state.IMAGE_STEPS = form_data.steps
+        return {
+            "IMAGE_STEPS": app.state.IMAGE_STEPS,
+            "status": True,
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=ERROR_MESSAGES.INCORRECT_FORMAT("  (e.g., 50)."),
+        )
+
+
 @app.get("/models")
 def get_models(user=Depends(get_current_user)):
     try:
@@ -81,7 +136,8 @@ def get_models(user=Depends(get_current_user)):
         models = r.json()
         return models
     except Exception as e:
-        raise HTTPException(status_code=r.status_code, detail=ERROR_MESSAGES.DEFAULT(e))
+        app.state.ENABLED = False
+        raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
 
 @app.get("/models/default")
@@ -92,7 +148,8 @@ async def get_default_model(user=Depends(get_admin_user)):
 
         return {"model": options["sd_model_checkpoint"]}
     except Exception as e:
-        raise HTTPException(status_code=r.status_code, detail=ERROR_MESSAGES.DEFAULT(e))
+        app.state.ENABLED = False
+        raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
 
 class UpdateModelForm(BaseModel):
@@ -140,7 +197,7 @@ def generate_image(
         if form_data.model:
             set_model_handler(form_data.model)
 
-        width, height = tuple(map(int, form_data.size.split("x")))
+        width, height = tuple(map(int, app.state.IMAGE_SIZE.split("x")))
 
         data = {
             "prompt": form_data.prompt,
@@ -148,6 +205,9 @@ def generate_image(
             "width": width,
             "height": height,
         }
+
+        if app.state.IMAGE_STEPS != None:
+            data["steps"] = app.state.IMAGE_STEPS
 
         if form_data.negative_prompt != None:
             data["negative_prompt"] = form_data.negative_prompt
@@ -162,4 +222,4 @@ def generate_image(
         return r.json()
     except Exception as e:
         print(e)
-        raise HTTPException(status_code=r.status_code, detail=ERROR_MESSAGES.DEFAULT(e))
+        raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
